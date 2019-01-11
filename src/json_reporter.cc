@@ -77,6 +77,8 @@ bool JSONReporter::ReportContext(const Context& context) {
   std::string walltime_value = LocalDateTimeString();
   out << indent << FormatKV("date", walltime_value) << ",\n";
 
+  out << indent << FormatKV("host_name", context.sys_info.name) << ",\n";
+
   if (Context::executable_name) {
     // windows uses backslash for its path separator,
     // which must be escaped in JSON otherwise it blows up conforming JSON
@@ -116,6 +118,12 @@ bool JSONReporter::ReportContext(const Context& context) {
   }
   indent = std::string(4, ' ');
   out << indent << "],\n";
+  out << indent << "\"load_avg\": [";
+  for (auto it = info.load_avg.begin(); it != info.load_avg.end();) {
+    out << *it++;
+    if (it != info.load_avg.end()) out << ",";
+  }
+  out << "],\n";
 
 #if defined(NDEBUG)
   const char build_type[] = "release";
@@ -159,7 +167,20 @@ void JSONReporter::Finalize() {
 void JSONReporter::PrintRunData(Run const& run) {
   std::string indent(6, ' ');
   std::ostream& out = GetOutputStream();
-  out << indent << FormatKV("name", run.benchmark_name) << ",\n";
+  out << indent << FormatKV("name", run.benchmark_name()) << ",\n";
+  out << indent << FormatKV("run_name", run.run_name) << ",\n";
+  out << indent << FormatKV("run_type", [&run]() -> const char* {
+    switch (run.run_type) {
+      case BenchmarkReporter::Run::RT_Iteration:
+        return "iteration";
+      case BenchmarkReporter::Run::RT_Aggregate:
+        return "aggregate";
+    }
+    BENCHMARK_UNREACHABLE();
+  }()) << ",\n";
+  if (run.run_type == BenchmarkReporter::Run::RT_Aggregate) {
+    out << indent << FormatKV("aggregate_name", run.aggregate_name) << ",\n";
+  }
   if (run.error_occurred) {
     out << indent << FormatKV("error_occurred", run.error_occurred) << ",\n";
     out << indent << FormatKV("error_message", run.error_message) << ",\n";
@@ -180,14 +201,7 @@ void JSONReporter::PrintRunData(Run const& run) {
   } else if (run.report_rms) {
     out << indent << FormatKV("rms", run.GetAdjustedCPUTime());
   }
-  if (run.bytes_per_second > 0.0) {
-    out << ",\n"
-        << indent << FormatKV("bytes_per_second", run.bytes_per_second);
-  }
-  if (run.items_per_second > 0.0) {
-    out << ",\n"
-        << indent << FormatKV("items_per_second", run.items_per_second);
-  }
+
   for (auto& c : run.counters) {
     out << ",\n" << indent << FormatKV(c.first, c.second);
   }

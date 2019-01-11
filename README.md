@@ -255,7 +255,7 @@ that might be used to customize high-order term calculation.
 
 ```c++
 BENCHMARK(BM_StringCompare)->RangeMultiplier(2)
-    ->Range(1<<10, 1<<18)->Complexity([](int n)->double{return n; });
+    ->Range(1<<10, 1<<18)->Complexity([](int64_t n)->double{return n; });
 ```
 
 ### Templated benchmarks
@@ -264,7 +264,7 @@ messages of size `sizeof(v)` `range_x` times. It also outputs throughput in the
 absence of multiprogramming.
 
 ```c++
-template <class Q> int BM_Sequential(benchmark::State& state) {
+template <class Q> void BM_Sequential(benchmark::State& state) {
   Q q;
   typename Q::value_type v;
   for (auto _ : state) {
@@ -428,6 +428,26 @@ BENCHMARK(BM_test)->Range(8, 8<<10)->UseRealTime();
 
 Without `UseRealTime`, CPU time is used by default.
 
+## Controlling timers
+Normally, the entire duration of the work loop (`for (auto _ : state) {}`)
+is measured. But sometimes, it is nessesary to do some work inside of
+that loop, every iteration, but without counting that time to the benchmark time.
+That is possible, althought it is not recommended, since it has high overhead.
+
+```c++
+static void BM_SetInsert_With_Timer_Control(benchmark::State& state) {
+  std::set<int> data;
+  for (auto _ : state) {
+    state.PauseTiming(); // Stop timers. They will not count until they are resumed.
+    data = ConstructRandomSet(state.range(0)); // Do something that should not be measured
+    state.ResumeTiming(); // And resume timers. They are now counting again.
+    // The rest will be measured.
+    for (int j = 0; j < state.range(1); ++j)
+      data.insert(RandomNumber());
+  }
+}
+BENCHMARK(BM_SetInsert_With_Timer_Control)->Ranges({{1<<10, 8<<10}, {128, 512}});
+```
 
 ## Manual timing
 For benchmarking something for which neither CPU time nor real-time are
@@ -545,12 +565,20 @@ The number of runs of each benchmark is specified globally by the
 `Repetitions` on the registered benchmark object. When a benchmark is run more
 than once the mean, median and standard deviation of the runs will be reported.
 
-Additionally the `--benchmark_report_aggregates_only={true|false}` flag or
-`ReportAggregatesOnly(bool)` function can be used to change how repeated tests
-are reported. By default the result of each repeated run is reported. When this
-option is `true` only the mean, median and standard deviation of the runs is reported.
-Calling `ReportAggregatesOnly(bool)` on a registered benchmark object overrides
-the value of the flag for that benchmark.
+Additionally the `--benchmark_report_aggregates_only={true|false}`,
+`--benchmark_display_aggregates_only={true|false}` flags or
+`ReportAggregatesOnly(bool)`, `DisplayAggregatesOnly(bool)` functions can be
+used to change how repeated tests are reported. By default the result of each
+repeated run is reported. When `report aggregates only` option is `true`,
+only the aggregates (i.e. mean, median and standard deviation, maybe complexity
+measurements if they were requested) of the runs is reported, to both the
+reporters - standard output (console), and the file.
+However when only the `display aggregates only` option is `true`,
+only the aggregates are displayed in the standard output, while the file
+output still contains everything.
+Calling `ReportAggregatesOnly(bool)` / `DisplayAggregatesOnly(bool)` on a
+registered benchmark object overrides the value of the appropriate flag for that
+benchmark.
 
 ## User-defined statistics for repeated benchmarks
 While having mean, median and standard deviation is nice, this may not be
@@ -657,9 +685,12 @@ In multithreaded benchmarks, each counter is set on the calling thread only.
 When the benchmark finishes, the counters from each thread will be summed;
 the resulting sum is the value which will be shown for the benchmark.
 
-The `Counter` constructor accepts two parameters: the value as a `double`
-and a bit flag which allows you to show counters as rates and/or as
-per-thread averages:
+The `Counter` constructor accepts three parameters: the value as a `double`
+; a bit flag which allows you to show counters as rates, and/or as per-thread
+iteration, and/or as per-thread averages, and/or iteration invariants;
+and a flag specifying the 'unit' - i.e. is 1k a 1000 (default,
+`benchmark::Counter::OneK::kIs1000`), or 1024
+(`benchmark::Counter::OneK::kIs1024`)?
 
 ```c++
   // sets a simple counter
@@ -675,6 +706,9 @@ per-thread averages:
 
   // There's also a combined flag:
   state.counters["FooAvgRate"] = Counter(numFoos,benchmark::Counter::kAvgThreadsRate);
+
+  // This says that we process with the rate of state.range(0) bytes every iteration:
+  state.counters["BytesProcessed"] = Counter(state.range(0), benchmark::Counter::kIsIterationInvariantRate, benchmark::Counter::OneK::kIs1024);
 ```
 
 When you're compiling in C++11 mode or later you can use `insert()` with
